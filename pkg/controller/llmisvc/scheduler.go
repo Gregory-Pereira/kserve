@@ -603,6 +603,8 @@ func (r *LLMInferenceServiceReconciler) expectedSchedulerDeployment(ctx context.
 				preserveSchedulerConfig(llmSvc, curr)...,
 			)
 		}
+
+		applyTracingConfig(llmSvc, &d.Spec.Template.Spec)
 	}
 
 	log.FromContext(ctx).V(2).Info("Expected router scheduler deployment", "deployment", d)

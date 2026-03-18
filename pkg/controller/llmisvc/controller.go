@@ -184,6 +184,10 @@ func (r *LLMInferenceServiceReconciler) reconcile(ctx context.Context, llmSvc *v
 	// We are only writing to status, so we can safely use the original object.
 	llmSvc.Spec = baseCfg.Spec
 
+	if err := validateTracing(llmSvc); err != nil {
+		return fmt.Errorf("tracing validation failed: %w", err)
+	}
+
 	if err := r.reconcileWorkload(ctx, llmSvc, config.StorageConfig, config.CredentialConfig); err != nil {
 		return fmt.Errorf("failed to reconcile workload: %w", err)
 	}

@@ -82,11 +82,49 @@ type LLMInferenceServiceSpec struct {
 	// +optional
 	Prefill *WorkloadSpec `json:"prefill,omitempty"`
 
+	// Tracing configuration for enabling distributed tracing via OpenTelemetry.
+	// When enabled, the controller injects the necessary CLI flags and environment variables
+	// into the inference scheduler (EPP) deployment.
+	// +optional
+	Tracing *TracingSpec `json:"tracing,omitempty"`
+
 	// BaseRefs allows inheriting and overriding configurations from one or more LLMInferenceServiceConfig instances.
 	// The controller merges these base configurations, with the current LLMInferenceService spec taking the highest precedence.
 	// When multiple baseRefs are provided, the last one in the list overrides previous ones.
 	// +optional
 	BaseRefs []corev1.LocalObjectReference `json:"baseRefs,omitempty"`
+}
+
+// TracingSpec defines the distributed tracing configuration for inference components.
+type TracingSpec struct {
+	// Enabled controls whether distributed tracing is active.
+	// When true, tracing CLI flags and OpenTelemetry environment variables are injected
+	// into the inference scheduler (EPP) deployment.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// OTLPEndpoint is the endpoint of the OpenTelemetry Collector to export traces to.
+	// This field is required when tracing is enabled.
+	// Example: "http://otel-collector:4317"
+	// +optional
+	OTLPEndpoint string `json:"otlpEndpoint,omitempty"`
+
+	// Sampling configuration for controlling trace sampling behavior.
+	// +optional
+	Sampling *TracingSamplingSpec `json:"sampling,omitempty"`
+}
+
+// TracingSamplingSpec defines the sampling configuration for distributed tracing.
+type TracingSamplingSpec struct {
+	// Sampler specifies the sampling strategy.
+	// Default: "parentbased_traceidratio"
+	// +optional
+	Sampler string `json:"sampler,omitempty"`
+
+	// SamplerArg is the argument for the sampler, e.g., the sampling ratio.
+	// Default: "0.1"
+	// +optional
+	SamplerArg string `json:"samplerArg,omitempty"`
 }
 
 // WorkloadSpec defines the configuration for a deployment workload, such as replicas and pod specifications.
