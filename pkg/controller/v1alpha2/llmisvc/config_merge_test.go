@@ -2117,6 +2117,177 @@ func TestWellKnownConfigResolver_Attach(t *testing.T) {
 	}
 }
 
+func TestDetectGPUResourceTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		podSpecs []*corev1.PodSpec
+		want     []string
+	}{
+		{
+			name:     "nil podspec",
+			podSpecs: []*corev1.PodSpec{nil},
+			want:     nil,
+		},
+		{
+			name: "no GPU resources",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "AMD GPU in requests",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"amd.com/gpu": resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"amd.com/gpu"},
+		},
+		{
+			name: "NVIDIA GPU in limits",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									"nvidia.com/gpu": resource.MustParse("4"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"nvidia.com/gpu"},
+		},
+		{
+			name: "Gaudi GPU",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"habana.ai/gaudi": resource.MustParse("8"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"habana.ai/gaudi"},
+		},
+		{
+			name: "NVIDIA MIG GPU",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"nvidia.com/mig-3g.20gb": resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"nvidia.com/mig-3g.20gb"},
+		},
+		{
+			name: "multiple podspecs (P/D scenario)",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"amd.com/gpu": resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"amd.com/gpu": resource.MustParse("2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"amd.com/gpu"},
+		},
+		{
+			name: "unknown GPU resource type is ignored",
+			podSpecs: []*corev1.PodSpec{
+				{
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									"custom.vendor/gpu": resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := llmisvc.DetectGPUResourceTypes(tt.podSpecs...)
+			if tt.want == nil {
+				if got.Len() != 0 {
+					t.Errorf("DetectGPUResourceTypes() = %v, want empty", got.UnsortedList())
+				}
+				return
+			}
+			for _, w := range tt.want {
+				if !got.Has(w) {
+					t.Errorf("DetectGPUResourceTypes() missing %q, got %v", w, got.UnsortedList())
+				}
+			}
+			if got.Len() != len(tt.want) {
+				t.Errorf("DetectGPUResourceTypes() has %d items, want %d: %v", got.Len(), len(tt.want), got.UnsortedList())
+			}
+		})
+	}
+}
+
 func TestWellKnownConfigResolver_Resolve(t *testing.T) {
 	tests := []struct {
 		name              string

@@ -16,6 +16,11 @@ limitations under the License.
 
 package llmisvc
 
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+)
+
 // SetUseVersionedConfigForTest overrides the useVersionedConfig flag for testing
 // and returns a cleanup function that restores the original value.
 func SetUseVersionedConfigForTest(enabled bool) func() {
@@ -24,4 +29,9 @@ func SetUseVersionedConfigForTest(enabled bool) func() {
 	return func() {
 		useVersionedConfig = original
 	}
+}
+
+// DetectGPUResourceTypes exposes detectGPUResourceTypes for testing.
+func DetectGPUResourceTypes(podSpecs ...*corev1.PodSpec) sets.Set[string] {
+	return detectGPUResourceTypes(podSpecs...)
 }

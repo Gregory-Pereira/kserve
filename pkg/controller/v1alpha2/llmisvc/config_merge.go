@@ -27,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -62,6 +63,11 @@ const (
 	// Router and scheduler configurations
 	configRouterSchedulerNameSuffix = "config-llm-scheduler"
 	configRouterRouteNameSuffix     = "config-llm-router-route"
+
+	// Accelerator config discovery labels and annotations
+	acceleratorConfigTypeLabel          = "opendatahub.io/config-type"
+	acceleratorConfigTypeLabelValue     = "accelerator"
+	recommendedAcceleratorsAnnotation   = "opendatahub.io/recommended-accelerators"
 )
 
 var (
@@ -203,6 +209,22 @@ func (r *LLMISVCReconciler) combineBaseRefsConfig(ctx context.Context, llmSvc *v
 		case resolvedSpec.Worker != nil && resolvedSpec.Parallelism.IsPipelineParallel():
 			// multi-node Pipeline Parallel
 			refs = append(refs, corev1.LocalObjectReference{Name: wr.Resolve(llmSvc, configWorkerPipelineParallelName)})
+		}
+	}
+
+	// Detect GPU resource types and find a matching accelerator-specific config overlay.
+	podSpecs := []*corev1.PodSpec{resolvedSpec.Template}
+	if resolvedSpec.Prefill != nil {
+		podSpecs = append(podSpecs, resolvedSpec.Prefill.Template)
+	}
+	gpuTypes := detectGPUResourceTypes(podSpecs...)
+	if gpuTypes.Len() > 0 {
+		accelConfig, err := r.findAcceleratorConfig(ctx, llmSvc.GetNamespace(), gpuTypes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find accelerator config: %w", err)
+		}
+		if accelConfig != "" {
+			refs = append(refs, corev1.LocalObjectReference{Name: accelConfig})
 		}
 	}
 
@@ -357,6 +379,82 @@ func isUsingTokenizerSidecar(spec v1alpha2.LLMInferenceServiceSpec) bool {
 		return false
 	}
 	return utils.GetContainerWithName(spec.Router.Scheduler.Template, tokenizerContainerName) != nil
+}
+
+// detectGPUResourceTypes extracts GPU resource type names from all containers in the given PodSpecs.
+func detectGPUResourceTypes(podSpecs ...*corev1.PodSpec) sets.Set[string] {
+	gpuTypes := sets.New[string]()
+	knownGPUs := sets.New[string](constants.DefaultGPUResourceTypeList...)
+
+	for _, podSpec := range podSpecs {
+		if podSpec == nil {
+			continue
+		}
+		for _, container := range podSpec.Containers {
+			for resourceName := range container.Resources.Requests {
+				if knownGPUs.Has(string(resourceName)) || strings.HasPrefix(string(resourceName), constants.NvidiaMigGPUResourceTypePrefix) {
+					gpuTypes.Insert(string(resourceName))
+				}
+			}
+			for resourceName := range container.Resources.Limits {
+				if knownGPUs.Has(string(resourceName)) || strings.HasPrefix(string(resourceName), constants.NvidiaMigGPUResourceTypePrefix) {
+					gpuTypes.Insert(string(resourceName))
+				}
+			}
+		}
+	}
+	return gpuTypes
+}
+
+// findAcceleratorConfig discovers an accelerator-specific LLMInferenceServiceConfig that matches
+// the GPU resource types found in the resolved spec. It lists configs labeled with
+// opendatahub.io/config-type=accelerator and checks their opendatahub.io/recommended-accelerators
+// annotation for a match.
+func (r *LLMISVCReconciler) findAcceleratorConfig(ctx context.Context, namespace string, gpuTypes sets.Set[string]) (string, error) {
+	if gpuTypes.Len() == 0 {
+		return "", nil
+	}
+	logger := log.FromContext(ctx).WithName("findAcceleratorConfig")
+
+	selector := labels.SelectorFromSet(labels.Set{
+		acceleratorConfigTypeLabel: acceleratorConfigTypeLabelValue,
+	})
+	listOpts := &client.ListOptions{LabelSelector: selector}
+
+	// Search system namespace first (where default configs live), then service namespace for overrides.
+	for _, ns := range []string{constants.KServeNamespace, namespace} {
+		configList := &v1alpha2.LLMInferenceServiceConfigList{}
+		listOpts.Namespace = ns
+		if err := r.List(ctx, configList, listOpts); err != nil {
+			logger.V(1).Info("Failed to list accelerator configs", "namespace", ns, "error", err)
+			continue
+		}
+
+		for i := range configList.Items {
+			cfg := &configList.Items[i]
+			annot, ok := cfg.Annotations[recommendedAcceleratorsAnnotation]
+			if !ok || annot == "" {
+				continue
+			}
+
+			var recommended []string
+			if err := json.Unmarshal([]byte(annot), &recommended); err != nil {
+				logger.V(1).Info("Skipping config with malformed recommended-accelerators annotation",
+					"config", cfg.Name, "namespace", ns, "error", err)
+				continue
+			}
+
+			for _, rec := range recommended {
+				if gpuTypes.Has(rec) {
+					logger.V(1).Info("Selected accelerator config",
+						"config", cfg.Name, "namespace", ns, "matchedGPU", rec)
+					return cfg.Name, nil
+				}
+			}
+		}
+	}
+
+	return "", nil
 }
 
 // ToParentRefs converts a slice of UntypedObjectReference (gateway refs) to a slice
